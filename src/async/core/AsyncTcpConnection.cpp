@@ -9,7 +9,7 @@ to a remote host. See usage instructions in the class definition.
 
 \verbatim
 Async - A library for programming event driven applications
-Copyright (C) 2003-2022 Tobias Blomberg
+Copyright (C) 2003-2025 Tobias Blomberg
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -293,6 +293,21 @@ void TcpConnection::setSslContext(SslContext& ctx, bool is_server)
 } /* TcpConnection::setSslContext */
 
 
+void TcpConnection::freeze(void)
+{
+  m_freezed = true;
+  m_wr_watch.setEnabled(false);
+} /* TcpConnection::freeze */
+
+
+void TcpConnection::unfreeze(void)
+{
+  m_freezed = false;
+  m_wr_watch.setEnabled(!m_write_buf.empty());
+  processRecvBuf();
+} /* TcpConnection::unfreeze */
+
+
 Async::SslX509 TcpConnection::sslPeerCertificate(void)
 {
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
@@ -472,7 +487,7 @@ void TcpConnection::recvHandler(FdWatch *watch)
   //          << std::endl;
 
   size_t recv_buf_size = m_recv_buf.size();
-  int cnt = read(sock, &m_recv_buf[recv_buf_size],
+  int cnt = read(sock, m_recv_buf.data()+recv_buf_size,
                  m_recv_buf.capacity()-recv_buf_size);
   //std::cout << "###   cnt=" << cnt << std::endl;
   if (cnt <= -1)
@@ -501,6 +516,15 @@ void TcpConnection::recvHandler(FdWatch *watch)
     m_recv_buf.reserve(new_capacity);
   }
 
+  if (!m_freezed)
+  {
+    processRecvBuf();
+  }
+} /* TcpConnection::recvHandler */
+
+
+void TcpConnection::processRecvBuf(void)
+{
   ssize_t processed = -1;
   if (m_ssl != nullptr)
   {
@@ -534,13 +558,13 @@ void TcpConnection::recvHandler(FdWatch *watch)
       onDisconnected(DR_PROTOCOL_ERROR);
     }
   }
-} /* TcpConnection::recvHandler */
+} /* TcpConnection::processRecvBuf */
 
 
 void TcpConnection::addToWriteBuf(const char *buf, size_t len)
 {
   m_write_buf.insert(m_write_buf.end(), buf, buf+len);
-  m_wr_watch.setEnabled(!m_write_buf.empty());
+  m_wr_watch.setEnabled(!m_freezed && !m_write_buf.empty());
 } /* TcpConnection::addToWriteBuf */
 
 
@@ -591,13 +615,6 @@ int TcpConnection::rawWrite(const void* buf, int count)
 } /* TcpConnection::rawWrite */
 
 
-void TcpConnection::sslPrintErrors(const char* fname)
-{
-  std::cerr << "*** ERROR: OpenSSL \"" << fname << "\" failed: ";
-  ERR_print_errors_fp(stderr);
-} /* TcpConnection::sslPrintErrors */
-
-
 TcpConnection::SslStatus TcpConnection::sslGetStatus(int n)
 {
   int err = SSL_get_error(m_ssl, n);
@@ -632,7 +649,7 @@ int TcpConnection::sslRecvHandler(char* src, int count)
     //std::cout << "### BIO_write: n=" << n << std::endl;
     if (n <= 0)
     {
-      sslPrintErrors("BIO_write");
+      SslContext::sslPrintErrors("BIO_write");
       return 0;
     }
 
@@ -643,7 +660,7 @@ int TcpConnection::sslRecvHandler(char* src, int count)
     {
       if (sslDoHandshake() == SSLSTATUS_FAIL)
       {
-        sslPrintErrors("sslDoHandshake");
+        SslContext::sslPrintErrors("sslDoHandshake");
         return -1;
       }
       if ((m_ssl == nullptr) || !SSL_is_init_finished(m_ssl))
@@ -675,7 +692,7 @@ int TcpConnection::sslRecvHandler(char* src, int count)
 
     if (status == SSLSTATUS_FAIL)
     {
-      sslPrintErrors("SSL_read/SSL_pending");
+      SslContext::sslPrintErrors("SSL_read/SSL_pending");
       return -1;
     }
 
@@ -691,7 +708,7 @@ int TcpConnection::sslRecvHandler(char* src, int count)
         }
         else if (!BIO_should_retry(m_ssl_wr_bio))
         {
-          sslPrintErrors("BIO_should_retry");
+          SslContext::sslPrintErrors("BIO_should_retry");
           return -1;
         }
       } while (n > 0);
@@ -699,7 +716,7 @@ int TcpConnection::sslRecvHandler(char* src, int count)
   }
 
   return (orig_count - count);
-} /* TcpConnection::readHandler */
+} /* TcpConnection::sslRecvHandler */
 
 
 enum TcpConnection::SslStatus TcpConnection::sslDoHandshake(void)

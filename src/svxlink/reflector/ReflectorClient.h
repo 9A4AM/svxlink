@@ -6,7 +6,7 @@
 
 \verbatim
 SvxReflector - An audio reflector for connecting SvxLink Servers
-Copyright (C) 2003-2023 Tobias Blomberg / SM0SVX
+Copyright (C) 2003-2025 Tobias Blomberg / SM0SVX
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -112,7 +112,7 @@ This class represents one client connection. When a client connects, an
 instance of this class will be created that will persist for the lifetime of
 the client connection.
 */
-class ReflectorClient
+class ReflectorClient : public sigc::trackable
 {
   public:
     using ClientId = ReflectorUdpMsg::ClientId;
@@ -344,20 +344,35 @@ class ReflectorClient
     }
 
     /**
+     * @brief   Return the remote UDP IP
+     * @return  Returns the source IP used by the client for UDP
+     */
+    const Async::IpAddress& remoteUdpHost(void) const
+    {
+      const auto& addr = m_client_src.first;
+      if (addr.isEmpty())
+      {
+        return remoteHost();
+      }
+      return addr;
+    }
+
+    /**
      * @brief   Return the remote port number
-     * @return  Returns the local port number used by the client
+     * @return  Returns the source port used by the client for UDP
      */
     uint16_t remoteUdpPort(void) const { return m_remote_udp_port; }
 
     /**
-     * @brief   Set the remote port number
-     * @param   The port number used by the client
+     * @brief   Set the remote UDP source (IP, port)
+     * @param   src A ClientSrc
      *
-     * The Reflector use this function to set the port number used by the
-     * client so that UDP packets can be send to the client and check that
-     * incoming packets originate from the correct port.
+     * The Reflector use this function to set the (IP, port number) used by the
+     * client so that UDP packets can be sent to the client, incoming UDP
+     * packets can be associated with the correct client object and to check
+     * that incoming packets originate from the correct source.
      */
-    void setRemoteUdpPort(uint16_t port);
+    void setRemoteUdpSource(const ClientSrc& src);
 
     /**
      * @brief   Get the callsign for this connection
@@ -566,7 +581,6 @@ class ReflectorClient
     Async::AtTimer              m_renew_cert_timer;
 
     static ClientId newClientId(ReflectorClient* client);
-    static ClientSrc newClientSrc(ReflectorClient* client);
 
     ReflectorClient(const ReflectorClient&);
     ReflectorClient& operator=(const ReflectorClient&);

@@ -6,7 +6,7 @@
 
 \verbatim
 SvxLink - A Multi Purpose Voice Services System for Ham Radio Use
-Copyright (C) 2003-2024 Tobias Blomberg / SM0SVX
+Copyright (C) 2003-2025 Tobias Blomberg / SM0SVX
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -31,8 +31,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  ****************************************************************************/
 
 #include <unistd.h>
-//#include <openssl/x509.h>
-//#include <openssl/x509v3.h>
+#include <sys/utsname.h>
 
 #include <sstream>
 #include <iostream>
@@ -108,31 +107,6 @@ using namespace Async;
  ****************************************************************************/
 
 namespace {
-  //void splitFilename(const std::string& filename, std::string& dirname,
-  //    std::string& basename)
-  //{
-  //  std::string ext;
-  //  basename = filename;
-
-  //  size_t basenamepos = filename.find_last_of('/');
-  //  if (basenamepos != string::npos)
-  //  {
-  //    if (basenamepos + 1 < filename.size())
-  //    {
-  //      basename = filename.substr(basenamepos + 1);
-  //    }
-  //    dirname = filename.substr(0, basenamepos + 1);
-  //  }
-
-  //  size_t extpos = basename.find_last_of('.');
-  //  if (extpos != string::npos)
-  //  {
-  //    if (extpos+1 < basename.size())
-  //    ext = basename.substr(extpos+1);
-  //    basename.erase(extpos);
-  //  }
-  //}
-
   template <class T>
   void hexdump(const T& d)
   {
@@ -251,8 +225,8 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
 {
     // Must create logic connection objects before calling LogicBase::initialize
   m_logic_con_in = new Async::AudioStreamStateDetector;
-  m_logic_con_in->sigStreamStateChanged.connect(
-      sigc::mem_fun(*this, &ReflectorLogic::onLogicConInStreamStateChanged));
+  m_logic_con_in->sigStreamIsIdle.connect(
+      sigc::mem_fun(*this, &ReflectorLogic::onLogicConInStreamIsIdle));
   m_logic_con_out = new Async::AudioStreamStateDetector;
   m_logic_con_out->sigStreamStateChanged.connect(
       sigc::mem_fun(*this, &ReflectorLogic::onLogicConOutStreamStateChanged));
@@ -267,7 +241,7 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
   std::vector<std::string> hosts;
   if (cfg().getValue(name(), "HOST", hosts))
   {
-    std::cout << "*** WARNING: The " << name()
+    std::cerr << "*** WARNING: The " << name()
               << "/HOST configuration variable is deprecated. "
                  "Use HOSTS instead." << std::endl;
   }
@@ -290,7 +264,7 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
     uint16_t reflector_port = 5300;
     if (cfg().getValue(name(), "PORT", reflector_port))
     {
-      std::cout << "*** WARNING: The " << name()
+      std::cerr << "*** WARNING: The " << name()
                 << "/PORT configuration variable is deprecated. "
                    "Use HOST_PORT instead." << std::endl;
     }
@@ -454,7 +428,7 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
   if (!loadClientCertificate())
   {
     std::cerr << "*** WARNING[" << name() << "]: Failed to load client "
-                 "certificate. Ifnoring on-disk stored certificate file '"
+                 "certificate. Ignoring on-disk stored certificate file '"
               << m_crtfile << "'." << std::endl;
   }
 
@@ -577,7 +551,7 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
                       std::numeric_limits<unsigned>::max(),
                       m_tg_select_inhibit_timeout, true))
   {
-    std::cout << "*** ERROR[" << name()
+    std::cerr << "*** ERROR[" << name()
               << "]: Illegal value (" << m_tg_select_inhibit_timeout
               << ") for TG_SELECT_INHIBIT_TIMEOUT" << std::endl;
     return false;
@@ -602,16 +576,20 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
     m_event_handler->playDtmf.connect(
           sigc::mem_fun(*this, &ReflectorLogic::handlePlayDtmf));
   }
+  m_event_handler->getConfigValue.connect(
+      sigc::mem_fun(*this, &ReflectorLogic::getConfigValue));
   m_event_handler->setConfigValue.connect(
       sigc::mem_fun(cfg(), &Async::Config::setValue<std::string>));
-  m_event_handler->setVariable("logic_name", name().c_str());
+  m_event_handler->setVariable("logic_name", name());
+  m_event_handler->setVariable("logic_type", type());
 
-  m_event_handler->processEvent("namespace eval Logic {}");
+  m_event_handler->processEvent(
+      std::string("namespace eval ") + name() + "::Logic {}");
   list<string> cfgvars = cfg().listSection(name());
   list<string>::const_iterator cfgit;
   for (cfgit=cfgvars.begin(); cfgit!=cfgvars.end(); ++cfgit)
   {
-    string var = "Logic::CFG_" + *cfgit;
+    string var = name() + "::Logic::CFG_" + *cfgit;
     string value;
     cfg().getValue(name(), *cfgit, value);
     m_event_handler->setVariable(var, value);
@@ -661,10 +639,16 @@ bool ReflectorLogic::initialize(Async::Config& cfgobj, const std::string& logic_
   m_node_info["swVer"] = SVXLINK_APP_VERSION;
   m_node_info["projVer"] = PROJECT_VERSION;
 
+  struct utsname osInfo{};
+  if (uname(&osInfo) == 0)
+  {
+    m_node_info["machineArch"] = osInfo.machine;
+  }
+
   cfg().getValue(name(), "UDP_HEARTBEAT_INTERVAL",
       m_udp_heartbeat_tx_cnt_reset);
 
-  connect();
+  Async::Application::app().runTask([&]{ connect(); });
 
   return true;
 } /* ReflectorLogic::initialize */
@@ -773,7 +757,7 @@ void ReflectorLogic::remoteCmdReceived(LogicBase* src_logic,
           }
           else
           {
-            std::cout << "*** WARNING: Not allowed to add a temporary montior "
+            std::cerr << "*** WARNING: Not allowed to add a temporary montior "
                          "for TG #" << tg << " which is being permanently "
                          "monitored" << std::endl;
             os << "command_failed " << cmd;
@@ -793,14 +777,14 @@ void ReflectorLogic::remoteCmdReceived(LogicBase* src_logic,
       }
       else
       {
-        std::cout << "*** WARNING: Failed to parse temporary TG monitor "
+        std::cerr << "*** WARNING: Failed to parse temporary TG monitor "
                      "command: " << cmd << std::endl;
         os << "command_failed " << cmd;
       }
     }
     else
     {
-      std::cout << "*** WARNING: Ignoring temporary TG monitoring command ("
+      std::cerr << "*** WARNING: Ignoring temporary TG monitoring command ("
                 << cmd << ") since that function is not enabled or there "
                    "were no TG specified" << std::endl;
       os << "command_failed " << cmd;
@@ -998,7 +982,7 @@ void ReflectorLogic::onConnected(void)
   //m_con.setMaxFrameSize(ReflectorMsg::MAX_SSL_SETUP_FRAME_SIZE);
   m_con_state = STATE_EXPECT_CA_INFO;
   //m_con.setMaxFrameSize(ReflectorMsg::MAX_PREAUTH_FRAME_FRAME_SIZE);
-  processEvent("reflector_connection_status_update 1");
+  //processEvent("reflector_connection_status_update 1");
 } /* ReflectorLogic::onConnected */
 
 
@@ -1041,7 +1025,7 @@ bool ReflectorLogic::onVerifyPeer(TcpConnection *con, bool preverify_ok,
   preverify_ok = preverify_ok && !cert.commonName().empty();
   if (!preverify_ok)
   {
-    std::cout << "*** ERROR[" << name()
+    std::cerr << "*** ERROR[" << name()
               << "]: Certificate verification failed for reflector server"
               << std::endl;
     std::cout << "------------- Peer Certificate --------------" << std::endl;
@@ -1209,12 +1193,13 @@ void ReflectorLogic::handleMsgError(std::istream& is)
   MsgError msg;
   if (!msg.unpack(is))
   {
-    cerr << "*** ERROR[" << name() << "]: Could not unpack MsgAuthError" << endl;
+    std::cerr << "*** ERROR[" << name() << "]: Could not unpack MsgAuthError"
+              << std::endl;
     disconnect();
     return;
   }
-  cout << name() << ": Error message received from server: " << msg.message()
-       << endl;
+  std::cerr << "*** ERROR[" << name() << "]: Server error: " << msg.message()
+       << std::endl;
   disconnect();
 } /* ReflectorLogic::handleMsgError */
 
@@ -1361,7 +1346,7 @@ void ReflectorLogic::handleMsgCAInfo(std::istream& is)
 
           // FIXME: Don't overwrite CA bundle if we have one already. To do
           //        that we need to implement verification of the new bundle.
-        std::cout << "*** WARNING[" << name()
+        std::cerr << "*** WARNING[" << name()
                   << "]: You need to update your CA bundle to the latest "
                      "version. Contact the reflector sysop."  << std::endl;
         request_ca_bundle = false;
@@ -1436,7 +1421,7 @@ void ReflectorLogic::handleMsgCABundle(std::istream& is)
   if (!signature_ok)
   {
     // FIXME: Add more info to the warning printout
-    std::cout << "*** WARNING[" << name()
+    std::cerr << "*** WARNING[" << name()
               << "]: Received CA bundle with invalid signature" << std::endl;
     disconnect();
     return;
@@ -2055,7 +2040,7 @@ bool ReflectorLogic::udpCipherDataReceived(const IpAddress& addr, uint16_t port,
   ss.write(reinterpret_cast<const char *>(buf), UdpCipher::AADLEN);
   if (!m_aad.unpack(ss))
   {
-    std::cout << "*** WARNING: Unpacking associated data failed for UDP "
+    std::cerr << "*** WARNING: Unpacking associated data failed for UDP "
                  "datagram from " << addr << ":" << port << std::endl;
     return true;
   }
@@ -2083,14 +2068,14 @@ void ReflectorLogic::udpDatagramReceived(const IpAddress& addr, uint16_t port,
 
   if (addr != m_con.remoteHost())
   {
-    cout << "*** WARNING[" << name()
+    cerr << "*** WARNING[" << name()
          << "]: UDP packet received from wrong source address "
          << addr << ". Should be " << m_con.remoteHost() << "." << endl;
     return;
   }
   if (port != m_con.remotePort())
   {
-    cout << "*** WARNING[" << name()
+    cerr << "*** WARNING[" << name()
          << "]: UDP packet received with wrong source port number "
          << port << ". Should be " << m_con.remotePort() << "." << endl;
     return;
@@ -2102,14 +2087,14 @@ void ReflectorLogic::udpDatagramReceived(const IpAddress& addr, uint16_t port,
   ReflectorUdpMsg header;
   if (!header.unpack(ss))
   {
-    cout << "*** WARNING[" << name()
+    cerr << "*** WARNING[" << name()
          << "]: Unpacking failed for UDP message header" << endl;
     return;
   }
 
   //if (header.clientId() != m_client_id)
   //{
-  //  cout << "*** WARNING[" << name()
+  //  cerr << "*** WARNING[" << name()
   //       << "]: UDP packet received with wrong client id "
   //       << header.clientId() << ". Should be " << m_client_id << "." << endl;
   //  return;
@@ -2142,6 +2127,7 @@ void ReflectorLogic::udpDatagramReceived(const IpAddress& addr, uint16_t port,
               << std::endl;
     m_con.markAsEstablished();
     m_con_state = STATE_CONNECTED;
+    processEvent("reflector_connection_status_update 1");
 
     if (m_selected_tg > 0)
     {
@@ -2226,7 +2212,7 @@ void ReflectorLogic::sendUdpMsg(const UdpCipher::AAD& aad,
   std::ostringstream adss;
   if (!aad.pack(adss))
   {
-    std::cout << "*** WARNING: Packing associated data failed for UDP "
+    std::cerr << "*** WARNING: Packing associated data failed for UDP "
                  "datagram to " << m_con.remoteHost() << ":"
               << m_con.remotePort() << std::endl;
     return;
@@ -2433,11 +2419,10 @@ bool ReflectorLogic::codecIsAvailable(const std::string &codec_name)
 } /* ReflectorLogic::codecIsAvailable */
 
 
-void ReflectorLogic::onLogicConInStreamStateChanged(bool is_active,
-                                                    bool is_idle)
+void ReflectorLogic::onLogicConInStreamIsIdle(bool is_idle)
 {
-  //cout << "### ReflectorLogic::onLogicConInStreamStateChanged: is_active="
-  //     << is_active << "  is_idle=" << is_idle << endl;
+  //std::cout << "### ReflectorLogic::onLogicConInStreamIsIdle: "
+  //          << "is_idle=" << is_idle << std::endl;
   if (is_idle)
   {
     if (m_qsy_pending_timer.isEnabled())
@@ -2479,7 +2464,11 @@ void ReflectorLogic::onLogicConInStreamStateChanged(bool is_active,
   }
 
   checkIdle();
-} /* ReflectorLogic::onLogicConInStreamStateChanged */
+
+  std::ostringstream ss;
+  ss << "local_talker_" << (is_idle ? "stop" : "start");
+  processEvent(ss.str());
+} /* ReflectorLogic::onLogicConInStreamIsIdle */
 
 
 void ReflectorLogic::onLogicConOutStreamStateChanged(bool is_active,
@@ -2670,6 +2659,14 @@ void ReflectorLogic::handlePlayDtmf(const std::string& digit, int amp,
   setIdle(false);
   LinkManager::instance()->playDtmf(this, digit, amp, duration);
 } /* ReflectorLogic::handlePlayDtmf */
+
+
+bool ReflectorLogic::getConfigValue(const std::string& section,
+                                    const std::string& tag,
+                                    std::string& value)
+{
+  return cfg().getValue(section, tag, value, true);
+} /* ReflectorLogic::getConfigValue */
 
 
 bool ReflectorLogic::loadClientCertificate(void)

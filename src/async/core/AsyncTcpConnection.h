@@ -9,7 +9,7 @@ to a remote host. See usage instructions in the class definition.
 
 \verbatim
 Async - A library for programming event driven applications
-Copyright (C) 2003-2022 Tobias Blomberg
+Copyright (C) 2003-2025 Tobias Blomberg
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -160,16 +160,15 @@ class TcpConnection : virtual public sigc::trackable
      */
     struct if_all_true_acc
     {
-      typedef bool result_type;
+      typedef int result_type;
       template <class I>
-      bool operator()(I first, I last)
+      result_type operator()(I first, I last)
       {
-        bool success = true;
         for (; first != last; first ++)
         {
-          success &= *first;
+          if (!*first) return 0;
         }
-        return success;
+        return 1;
       }
     };
 
@@ -329,6 +328,23 @@ class TcpConnection : virtual public sigc::trackable
     bool isServer(void) const { return m_ssl_is_server; }
 
     /**
+     * @brief   Stop all communication
+     *
+     * When a connection is freezed incoming data will be buffered but the
+     * dataReceived signal will not be emitted. Written data is also buffered.
+     */
+    void freeze(void);
+
+    /**
+     * @brief   Reenable all communication
+     *
+     * When a frozen connection is unfreezed the dataReceived signal will be
+     * emitted for any received and buffered data. If there are any written
+     * data that has been buffered it will be transmitted.
+     */
+    void unfreeze(void);
+
+    /**
      * @brief   Get common name for the SSL connection
      * @return  Returns the common name for the associated X509 certificate
      */
@@ -370,7 +386,7 @@ class TcpConnection : virtual public sigc::trackable
      * For more information on the function arguments have a look at the manual
      * page for the OpenSSL function SSL_set_verify().
      */
-    sigc::signal<bool, TcpConnection*, bool,
+    sigc::signal<if_all_true_acc::result_type, TcpConnection*, int,
                  X509_STORE_CTX*>::accumulated<if_all_true_acc> verifyPeer;
 
     /**
@@ -467,17 +483,16 @@ class TcpConnection : virtual public sigc::trackable
     /**
      * @brief   Emit the verifyPeer signal
      * @param   preverify_ok  The basic certificate verifications passed
-     * @param   x509_store_ctx  The OpenSSL X509 store context
+     * @param   store_ctx     The OpenSSL X509 store context
      * @return  Returns 1 on success or 0 if verification fail
      */
-    virtual int emitVerifyPeer(int preverify_ok,
-                               X509_STORE_CTX* x509_store_ctx)
+    virtual int emitVerifyPeer(int preverify_ok, X509_STORE_CTX* store_ctx)
     {
       if (verifyPeer.empty())
       {
         return preverify_ok;
       }
-      return verifyPeer(this, preverify_ok == 1, x509_store_ctx) ? 1 : 0;
+      return verifyPeer(this, preverify_ok, store_ctx);
     }
 
   private:
@@ -515,6 +530,8 @@ class TcpConnection : virtual public sigc::trackable
     BIO*              m_ssl_wr_bio        = nullptr; // SSL writes, we read
     std::vector<char> m_ssl_encrypt_buf;
 
+    bool              m_freezed           = false;
+
     static TcpConnection* lookupConnection(SSL* ssl)
     {
       auto it = ssl_con_map.find(ssl);
@@ -524,11 +541,11 @@ class TcpConnection : virtual public sigc::trackable
                                  X509_STORE_CTX* x509_store_ctx);
 
     void recvHandler(FdWatch *watch);
+    void processRecvBuf(void);
     void addToWriteBuf(const char *buf, size_t len);
     void onWriteSpaceAvailable(Async::FdWatch* w);
     int rawWrite(const void* buf, int count);
 
-    void sslPrintErrors(const char* fname);
     SslStatus sslGetStatus(int n);
     int sslRecvHandler(char* src, int count);
     SslStatus sslDoHandshake(void);

@@ -6,7 +6,7 @@
 
 \verbatim
 SvxReflector - An audio reflector for connecting SvxLink Servers
-Copyright (C) 2003-2024 Tobias Blomberg / SM0SVX
+Copyright (C) 2003-2025 Tobias Blomberg / SM0SVX
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -202,6 +202,27 @@ namespace {
 
 /****************************************************************************
  *
+ * Public static functions
+ *
+ ****************************************************************************/
+
+time_t Reflector::timeToRenewCert(const Async::SslX509& cert)
+{
+  if (cert.isNull())
+  {
+    return 0;
+  }
+
+  int days=0, seconds=0;
+  cert.validityTime(days, seconds);
+  time_t renew_time = cert.notBefore() +
+    (static_cast<time_t>(days)*24*3600 + seconds)*RENEW_AFTER;
+  return renew_time;
+} /* Reflector::timeToRenewCert */
+
+
+/****************************************************************************
+ *
  * Public member functions
  *
  ****************************************************************************/
@@ -261,6 +282,7 @@ bool Reflector::initialize(Async::Config &cfg)
   std::string listen_port("5300");
   cfg.getValue("GLOBAL", "LISTEN_PORT", listen_port);
   m_srv = new TcpServer<FramedTcpConnection>(listen_port);
+  m_srv->setConnectionThrottling(10, 0.1, 1000);
   m_srv->clientConnected.connect(
       mem_fun(*this, &Reflector::clientConnected));
   m_srv->clientDisconnected.connect(
@@ -344,6 +366,8 @@ bool Reflector::initialize(Async::Config &cfg)
         mem_fun(*this, &Reflector::ctrlPtyDataReceived));
   }
 
+  m_cfg->getValue("GLOBAL", "ACCEPT_CERT_EMAIL", m_accept_cert_email);
+
   m_cfg->valueUpdated.connect(sigc::mem_fun(*this, &Reflector::cfgUpdated));
 
   return true;
@@ -382,6 +406,8 @@ void Reflector::broadcastMsg(const ReflectorMsg& msg,
 bool Reflector::sendUdpDatagram(ReflectorClient *client,
     const ReflectorUdpMsg& msg)
 {
+  auto udp_addr = client->remoteUdpHost();
+  auto udp_port = client->remoteUdpPort();
   if (client->protoVer() >= ProtoVer(3, 0))
   {
     ReflectorUdpMsg header(msg.type());
@@ -395,11 +421,10 @@ bool Reflector::sendUdpDatagram(ReflectorClient *client,
     if (!aad.pack(aadss))
     {
       std::cout << "*** WARNING: Packing associated data failed for UDP "
-                   "datagram to " << client->remoteHost() << ":"
-                << client->remotePort() << std::endl;
+                   "datagram to " << udp_addr << ":" << udp_port << std::endl;
       return false;
     }
-    return m_udp_sock->write(client->remoteHost(), client->remoteUdpPort(),
+    return m_udp_sock->write(udp_addr, udp_port,
                              aadss.str().data(), aadss.str().size(),
                              ss.str().data(), ss.str().size());
   }
@@ -410,7 +435,7 @@ bool Reflector::sendUdpDatagram(ReflectorClient *client,
     ostringstream ss;
     assert(header.pack(ss) && msg.pack(ss));
     return m_udp_sock->UdpSocket::write(
-        client->remoteHost(), client->remoteUdpPort(),
+        udp_addr, udp_port,
         ss.str().data(), ss.str().size());
   }
 } /* Reflector::sendUdpDatagram */
@@ -473,6 +498,26 @@ Reflector::loadClientCsr(const std::string& callsign)
   (void)csr.readPemFile(m_csrs_dir + "/" + callsign + ".csr");
   return csr;
 } /* Reflector::loadClientPendingCsr */
+
+
+bool Reflector::renewedClientCert(Async::SslX509& cert)
+{
+  if (cert.isNull())
+  {
+    return false;
+  }
+
+  std::string callsign(cert.commonName());
+  Async::SslX509 new_cert = loadClientCertificate(callsign);
+  if (!new_cert.isNull() &&
+      ((new_cert.publicKey() != cert.publicKey()) ||
+       (timeToRenewCert(new_cert) <= std::time(NULL))))
+  {
+    return signClientCert(cert, "CRT_RENEWED");
+  }
+  cert = std::move(new_cert);
+  return !cert.isNull();
+} /* Reflector::renewedClientCert */
 
 
 bool Reflector::signClientCert(Async::SslX509& cert, const std::string& ca_op)
@@ -543,8 +588,7 @@ Async::SslX509 Reflector::signClientCsr(const std::string& cn)
   std::string csr_path = m_csrs_dir + "/" + cn + ".csr";
   if (rename(req.filePath().c_str(), csr_path.c_str()) != 0)
   {
-    char errstr[256];
-    (void)strerror_r(errno, errstr, sizeof(errstr));
+    auto errstr = SvxLink::strError(errno);
     std::cerr << "*** WARNING: Failed to move signed CSR from '"
               << req.filePath() << "' to '" << csr_path << "': "
               << errstr << std::endl;
@@ -565,7 +609,7 @@ Async::SslX509 Reflector::loadClientCertificate(const std::string& callsign)
   Async::SslX509 cert;
   if (!cert.readPemFile(m_certs_dir + "/" + callsign + ".crt") ||
       cert.isNull() ||
-      !cert.verify(m_issue_ca_pkey) ||
+      //!cert.verify(m_issue_ca_pkey) ||
       !cert.timeIsWithinRange())
   {
     return nullptr;
@@ -618,7 +662,7 @@ bool Reflector::callsignOk(const std::string& callsign) const
       accept_cs_re_str.empty())
   {
     accept_cs_re_str =
-      "[A-Z0-9][A-Z]{0,2}\\d[A-Z0-9]{1,3}[A-Z](?:-[A-Z0-9]{1,3})?";
+      "[A-Z0-9][A-Z]{0,2}\\d[A-Z0-9]{0,3}[A-Z](?:-[A-Z0-9]{1,3})?";
   }
   const std::regex accept_callsign_re(accept_cs_re_str);
   if (!std::regex_match(callsign, accept_callsign_re))
@@ -646,6 +690,60 @@ bool Reflector::callsignOk(const std::string& callsign) const
 
   return true;
 } /* Reflector::callsignOk */
+
+
+bool Reflector::emailOk(const std::string& email) const
+{
+  if (m_accept_cert_email.empty())
+  {
+    return true;
+  }
+  return std::regex_match(email, std::regex(m_accept_cert_email));
+} /* Reflector::emailOk */
+
+
+bool Reflector::reqEmailOk(const Async::SslCertSigningReq& req) const
+{
+  if (req.isNull())
+  {
+    return false;
+  }
+
+  const auto san = req.extensions().subjectAltName();
+  if (san.isNull())
+  {
+    return emailOk("");
+  }
+
+  size_t email_cnt = 0;
+  bool email_ok = true;
+  san.forEach(
+      [&](int type, std::string value)
+      {
+        email_cnt += 1;
+        email_ok &= emailOk(value);
+      },
+      GEN_EMAIL);
+  email_ok &= (email_cnt > 0) || emailOk("");
+  return email_ok;
+} /* Reflector::reqEmailOk */
+
+
+std::string Reflector::checkCsr(const Async::SslCertSigningReq& req)
+{
+  if (!callsignOk(req.commonName()))
+  {
+    return std::string("Certificate signing request with invalid callsign '") +
+           req.commonName() + "'";
+  }
+  if (!reqEmailOk(req))
+  {
+    return std::string(
+             "Certificate signing request with no or invalid CERT_EMAIL"
+           );
+  }
+  return "";
+} /* Reflector::checkCsr */
 
 
 Async::SslX509 Reflector::csrReceived(Async::SslCertSigningReq& req)
@@ -681,10 +779,10 @@ Async::SslX509 Reflector::csrReceived(Async::SslCertSigningReq& req)
     return nullptr;
   }
 
-  std::string crtfile(m_certs_dir + "/" + callsign + ".crt");
-  Async::SslX509 cert;
-  if (!cert.readPemFile(crtfile) || !cert.verify(m_issue_ca_pkey) ||
-      !cert.timeIsWithinRange() || (cert.publicKey() != req.publicKey()))
+  Async::SslX509 cert = loadClientCertificate(callsign);
+  if (!cert.isNull() &&
+      ((cert.publicKey() != req.publicKey()) ||
+       (timeToRenewCert(cert) <= std::time(NULL))))
   {
     cert.set(nullptr);
   }
@@ -764,8 +862,8 @@ void Reflector::clientDisconnected(Async::FramedTcpConnection *con,
   {
     std::cout << con->remoteHost() << ":" << con->remotePort() << ": ";
   }
-  std::cout << "Client disconnected: " << TcpConnection::disconnectReasonStr(reason)
-       << endl;
+  std::cout << "Client disconnected: "
+            << TcpConnection::disconnectReasonStr(reason) << std::endl;
 
   m_client_con_map.erase(it);
 
@@ -774,7 +872,8 @@ void Reflector::clientDisconnected(Async::FramedTcpConnection *con,
     broadcastMsg(MsgNodeLeft(client->callsign()),
         ReflectorClient::ExceptFilter(client));
   }
-  Application::app().runTask([=]{ delete client; });
+  //Application::app().runTask([=]{ delete client; });
+  delete client;
 } /* Reflector::clientDisconnected */
 
 
@@ -952,6 +1051,14 @@ void Reflector::udpDatagramReceived(const IpAddress& addr, uint16_t port,
            << std::endl;
       return;
     }
+
+    if (addr != client->remoteHost())
+    {
+      cerr << "*** WARNING[" << client->callsign()
+           << "]: Incoming UDP packet has the wrong source ip, "
+           << addr << " instead of " << client->remoteHost() << endl;
+      return;
+    }
   }
 
   //auto client = ReflectorClient::lookup(std::make_pair(addr, port));
@@ -966,16 +1073,9 @@ void Reflector::udpDatagramReceived(const IpAddress& addr, uint16_t port,
   //  }
   //}
 
-  if (addr != client->remoteHost())
-  {
-    cerr << "*** WARNING[" << client->callsign()
-         << "]: Incoming UDP packet has the wrong source ip, "
-         << addr << " instead of " << client->remoteHost() << endl;
-    return;
-  }
   if (client->remoteUdpPort() == 0)
   {
-    client->setRemoteUdpPort(port);
+    client->setRemoteUdpSource(std::make_pair(addr, port));
     client->sendUdpMsg(MsgUdpHeartbeat());
   }
   if (port != client->remoteUdpPort())
@@ -1417,13 +1517,72 @@ void Reflector::ctrlPtyDataReceived(const void *buf, size_t count)
   if (cmd == "CFG")
   {
     std::string section, tag, value;
-    if (!(ss >> section >> tag >> value) || !ss.eof())
+    ss >> section >> tag >> value;
+    if (!value.empty())
     {
-      errss << "Invalid CFG PTY command '" << cmdline << "'. "
-               "Usage: CFG <section> <tag> <value>";
+      m_cfg->setValue(section, tag, value);
+    }
+    else if (!tag.empty())
+    {
+      std::cout << section << "/" << tag << "=\""
+                << m_cfg->getValue(section, tag) << "\""
+                << std::endl;
+    }
+    else if (!section.empty())
+    {
+      for (const auto& tag : m_cfg->listSection(section))
+      {
+        std::cout << section << "/" << tag << "=\""
+                  << m_cfg->getValue(section, tag) << "\""
+                  << std::endl;
+      }
+    }
+    else
+    {
+      for (const auto& section : m_cfg->listSections())
+      {
+        for (const auto& tag : m_cfg->listSection(section))
+        {
+          std::cout << section << "/" << tag << "=\""
+                    << m_cfg->getValue(section, tag) << "\""
+                    << std::endl;
+        }
+      }
+    }
+    //if ((ss >> section >> tag >> value) || !ss.eof())
+    //{
+    //  errss << "Invalid CFG PTY command '" << cmdline << "'. "
+    //           "Usage: CFG <section> <tag> <value>";
+    //  goto write_status;
+    //}
+  }
+  else if (cmd == "NODE")
+  {
+    std::string subcmd, callsign;
+    unsigned blocktime;
+    if (!(ss >> subcmd >> callsign >> blocktime))
+    {
+      errss << "Invalid NODE PTY command '" << cmdline << "'. "
+               "Usage: NODE BLOCK <callsign> <blocktime seconds>";
       goto write_status;
     }
-    m_cfg->setValue(section, tag, value);
+    std::transform(subcmd.begin(), subcmd.end(), subcmd.begin(), ::toupper);
+    if (subcmd == "BLOCK")
+    {
+      auto node = ReflectorClient::lookup(callsign);
+      if (node == nullptr)
+      {
+        errss << "Could not find node " << callsign;
+        goto write_status;
+      }
+      node->setBlock(blocktime);
+    }
+    else
+    {
+      errss << "Invalid NODE PTY command '" << cmdline << "'. "
+               "Usage: NODE BLOCK <callsign> <blocktime seconds>";
+      goto write_status;
+    }
   }
   else if (cmd == "CA")
   {
@@ -1592,8 +1751,7 @@ bool Reflector::loadCertificateFiles(void)
   struct stat st;
   if (stat(m_ca_bundle_file.c_str(), &st) != 0)
   {
-    char errstr[256];
-    (void)strerror_r(errno, errstr, sizeof(errstr));
+    auto errstr = SvxLink::strError(errno);
     std::cerr << "*** ERROR: Failed to read CA file from '"
               << m_ca_bundle_file << "': " << errstr << std::endl;
     return false;

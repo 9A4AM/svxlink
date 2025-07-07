@@ -1,12 +1,12 @@
 /**
 @file   AsyncDigest.h
-@brief  A_brief_description_for_this_file
+@brief  Calculate digests and signatures
 @author Tobias Blomberg / SM0SVX
 @date   2024-04-27
 
 \verbatim
-<A brief description of the program or library this file belongs to>
-Copyright (C) 2003-2024 Tobias Blomberg / SM0SVX
+Async - A library for programming event driven applications
+Copyright (C) 2003-2025 Tobias Blomberg / SM0SVX
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -43,6 +43,7 @@ An example of how to use the Async::Digest class
 #include <openssl/err.h>
 
 #include <vector>
+#include <cstddef>
 
 
 /****************************************************************************
@@ -466,7 +467,7 @@ class Digest
           m_md = nullptr;
         }
         operator const EVP_MD*() const { return m_md; }
-        bool operator==(nullptr_t) const { return (m_md == nullptr); }
+        bool operator==(std::nullptr_t) const { return (m_md == nullptr); }
       private:
 #if OPENSSL_VERSION_MAJOR >= 3
         EVP_MD* m_md = nullptr;

@@ -1,13 +1,12 @@
 /**
-@file	 AprsPty.h
-@brief   A interface to receive Aprs messages over a pseudo Tty device
-         to send the information into the Aprs network
-@author  Tobias Blomberg / SM0SVX & Steve Koehler / DH1DM & Adi Bier / DL1HRC
-@date	 2014-08-05
+@file   LogWriter.h
+@brief  A class for writing stdout and stderr to a logfile
+@author Tobias Blomberg / SM0SVX
+@date   2025-06-11
 
 \verbatim
 SvxLink - A Multi Purpose Voice Services System for Ham Radio Use
-Copyright (C) 2004-2014  Tobias Blomberg / SM0SVX
+Copyright (C) 2003-2025 Tobias Blomberg / SM0SVX
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -25,8 +24,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 \endverbatim
 */
 
-#ifndef APRS_PTY_INCLUDED
-#define APRS_PTY_INCLUDED
+#ifndef LOG_WRITER_INCLUDED
+#define LOG_WRITER_INCLUDED
 
 
 /****************************************************************************
@@ -35,6 +34,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  ****************************************************************************/
 
+#include <string>
+#include <thread>
+#include <atomic>
 
 
 /****************************************************************************
@@ -51,7 +53,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  ****************************************************************************/
 
-#include <AsyncPty.h>
 
 
 /****************************************************************************
@@ -68,7 +69,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  ****************************************************************************/
 
-using namespace sigc;
 
 
 /****************************************************************************
@@ -102,92 +102,77 @@ using namespace sigc;
  ****************************************************************************/
 
 /**
-@brief   A interface to receive Aprs messages over a pseudo Tty device
-         to send the information into the Aprs network
-@author  Tobias Blomberg / SM0SVX & Steve Koehler / DH1DM & Adi Bier / DL1HRC
-@date	 2014-08-05
+@brief  A class for writing stdout and stderr to a logfile
+@author Tobias Blomberg / SM0SVX
+@date   2025-06-11
 
-This interface receive messages through a PTY device.  This
-can be used to gateway Aprs messages to the Aprs network
+This is a threaded logging class for routing stdout and stderr to a logfile.
+Each row will be prefixed with a timestamp.
 */
-class AprsPty
+class LogWriter
 {
   public:
     /**
-     * @brief 	Default constuctor
+     * @brief   Default constructor
      */
-    AprsPty(void) : pty(0) {}
+    LogWriter(void);
 
     /**
-     * @brief 	Destructor
+     * @brief   Disallow copy construction
      */
-    ~AprsPty(void)
-    {
-      delete pty;
-    }
+    LogWriter(const LogWriter&) = delete;
 
     /**
-     * @brief 	Initialize the AprsPty device
-     * @return	Returns \em true on success or else \em false
+     * @brief   Disallow copy assignment
      */
-    bool initialize(const std::string link_path)
-    {
-      pty = new Async::Pty(link_path);
-      if (pty == 0)
-      {
-        return false;
-      }
-      pty->dataReceived.connect(sigc::mem_fun(*this, &AprsPty::dataReceived));
-      return pty->open();
-    }
+    LogWriter& operator=(const LogWriter&) = delete;
 
-    /*
-    */
-    sigc::signal<void, std::string> messageReceived;
+    /**
+     * @brief   Destructor
+     */
+    ~LogWriter(void);
 
-  protected:
+    /**
+     * @brief   A_brief_member_function_description
+     * @param   param1 Description_of_param1
+     * @return  Return_value_of_this_member_function
+     */
+    void setTimestampFormat(const std::string& format);
+
+    void setFilename(const std::string& name);
+
+    void start(void);
+
+    void stop(void);
+
+    void reopenLogfile(void);
+
+    void redirectStdout(void);
+
+    void redirectStderr(void);
+
+    void writerThread(void);
 
   private:
-    Async::Pty      *pty;
-    std::string     message;
+    std::string       logfile_name;
+    int               logfd           = -1;
+    std::string       tstamp_format   = "%c";
+    std::atomic_bool  reopen_logfile;
+    int               pipefd[2]       = {-1, -1};
+    std::thread       logthread;
 
-    AprsPty(const AprsPty&);
-    AprsPty& operator=(const AprsPty&);
+    bool logfileOpen(void);
+    void logfileClose(void);
+    void logfileReopen(std::string reason);
+    bool logfileWriteTimestamp(void);
+    void logfileWrite(const char *buf);
+    void logfileFlush(void);
 
-    /**
-     * @brief   Called when a command is received on the master PTY
-     * @param   message The received message
-     *
-     * All other commands are ignored.
-     */
-    void dataReceived(const void *buf, size_t count)
-    {
-      const char *ptr = reinterpret_cast<const char*>(buf);
-      for (size_t i=0; i<count; ++i)
-      {
-        const char &digit = *ptr++;
-        if (digit != '\n')
-        {
-          message += digit;
-        }
-        else
-        {
-          messageReceived(message);
-          message = "";
-        }
-      }
-    } /* dataReceived */
-
-};  /* class AprsPty */
+}; /* class LogWriter */
 
 
-//} /* namespace */
-
-#endif /* APRS_PTY_INCLUDED */
-
-
+#endif /* LOG_WRITER_INCLUDED */
 
 /*
  * This file has not been truncated
  */
-
