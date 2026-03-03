@@ -2,12 +2,11 @@
 set(SVXLINK_SRCS
   svxlink.cpp MsgHandler.cpp Module.cpp Logic.cpp EventHandler.cpp
   LinkManager.cpp CmdParser.cpp QsoRecorder.cpp DtmfDigitHandler.cpp
-  LogWriter.cpp
   )
 
 # TCL event handler files to install in the events.d subdirectory
 set(SVXLINK_TCL_EVENT_FILES
-  Module.tcl CW.tcl SelCall.tcl locale.tcl Logic.tcl
+  Module.tcl CW.tcl SelCall.tcl locale.tcl LogicBase.tcl Logic.tcl
   SimplexLogicType.tcl RepeaterLogicType.tcl ReflectorLogicType.tcl
   ReflectorV2LogicType.tcl SimplexLogic.tcl RepeaterLogic.tcl ReflectorLogic.tcl
   )
@@ -124,7 +123,7 @@ install_if_not_exists(${CMAKE_CURRENT_BINARY_DIR}/gpio.conf
   )
 install_if_not_exists(node_info.json ${SVX_SYSCONF_INSTALL_DIR})
 install(FILES events.tcl DESTINATION ${SVX_SHARE_INSTALL_DIR})
-install(FILES globals.tcl ${SVXLINK_TCL_EVENT_FILES}
+install(FILES globals.tcl squelch_timeout.tcl ${SVXLINK_TCL_EVENT_FILES}
   DESTINATION ${SVX_SHARE_INSTALL_DIR}/events.d
   )
 install(PROGRAMS ${RUNTIME_OUTPUT_DIRECTORY}/svxlink_gpio_up

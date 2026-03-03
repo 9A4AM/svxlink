@@ -61,6 +61,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include <LocationInfo.h>
 #include <common.h>
 #include <config.h>
+#include <LogWriter.h>
 
 
 /****************************************************************************
@@ -72,7 +73,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 #include "version/SVXLINK.h"
 #include "Logic.h"
 #include "LinkManager.h"
-#include "LogWriter.h"
 
 
 /****************************************************************************
@@ -179,7 +179,12 @@ int main(int argc, char **argv)
 
   parse_arguments(argc, const_cast<const char **>(argv));
 
-  int noclose = 0;
+  if (daemonize && (daemon(1, 0) == -1))
+  {
+    perror("daemon");
+    exit(1);
+  }
+
   if (quiet || (logfile_name != 0))
   {
     int devnull = open("/dev/null", O_RDWR);
@@ -197,7 +202,7 @@ int main(int argc, char **argv)
 
     if (logfile_name != 0)
     {
-      logwriter.setFilename(logfile_name);
+      logwriter.setDestinationName(logfile_name);
       if (!quiet)
       {
         logwriter.redirectStdout();
@@ -211,20 +216,8 @@ int main(int argc, char **argv)
         perror("dup2(stdin)");
         exit(1);
       }
-
-        /* Tell the daemon function call not to close the file descriptors */
-      noclose = 1;
     }
     close(devnull);
-  }
-
-  if (daemonize)
-  {
-    if (daemon(0, noclose) == -1)
-    {
-      perror("daemon");
-      exit(1);
-    }
   }
 
   if (pidfile_name != NULL)
@@ -478,6 +471,8 @@ int main(int argc, char **argv)
     Async::Application::app().quit();
   }
 
+  std::cout << "NOTICE: Initialization done. Starting main application."
+            << std::endl;
   app.exec();
 
   LinkManager::deleteInstance();
@@ -597,7 +592,7 @@ static void stdinHandler(FdWatch *w)
   int cnt = ::read(STDIN_FILENO, buf, 1);
   if (cnt == -1)
   {
-    fprintf(stderr, "*** error reading from stdin\n");
+    fprintf(stderr, "*** ERROR: Reading from stdin failed\n");
     Application::app().quit();
     return;
   }
@@ -717,7 +712,7 @@ static void sighup_handler(int signal)
     cout << "Ignoring SIGHUP\n";
     return;
   }
-  std::cout << "SIGPIPE received" << std::endl;
+  std::cout << "SIGHUP received" << std::endl;
   logwriter.reopenLogfile();
 } /* sighup_handler */
 
@@ -738,7 +733,8 @@ static void sigterm_handler(int signal)
       break;
   }
 
-  std::cout << "\n" << signame << " received. Shutting down application..."
+  std::cout << "\nNOTICE: " << signame
+            << " received. Shutting down application..."
             << std::endl;
   Application::app().quit();
 } /* sigterm_handler */

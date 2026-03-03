@@ -205,7 +205,7 @@ class ReflectorLogic : public LogicBase
       STATE_EXPECT_CA_BUNDLE,
       STATE_EXPECT_SSL_CON_READY,
       STATE_EXPECT_AUTH_ANSWER,
-      STATE_EXPECT_AUTH_OK,
+      STATE_AUTHENTICATED,
       STATE_EXPECT_SERVER_INFO,
       STATE_EXPECT_START_UDP_ENCRYPTION,
       STATE_EXPECT_UDP_HEARTBEAT,
@@ -324,7 +324,6 @@ class ReflectorLogic : public LogicBase
     void disconnect(void);
     void reconnect(void);
     bool isConnected(void) const;
-    bool isTcpLoggedIn(void) const { return m_con_state >= STATE_TCP_CONNECTED; }
     bool isLoggedIn(void) const { return m_con_state == STATE_CONNECTED; }
     void allEncodedSamplesFlushed(void);
     void flushTimeout(Async::Timer *t=0);

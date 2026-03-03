@@ -4,17 +4,12 @@
 #
 ###############################################################################
 
-# Source locale handling code
-sourceTclWithOverrides "locale.tcl"
+# Source basic logic core functionality
+sourceTclWithOverrides "LogicBase.tcl"
+
 
 # Wrap all variables and functions in a namespace
 namespace eval Logic {
-
-# Enable finding commands in the parent namespace from this namespace
-namespace path [namespace parent]
-
-# Add the logic_name variable to the Logic namespace to support legacy TCL code
-variable logic_name ${::logic_name}
 
 # A variable used to store a timestamp for the last identification.
 variable prev_ident 0
@@ -67,30 +62,6 @@ variable sql_rx_id "?"
 
 # Load TCL code modules
 sourceTclWithOverrides "CW.tcl"
-
-
-#
-# An "overloaded" playMsg that eliminates the need to write "Core" as the first
-# argument everywhere.
-# For legacy code support, if more than one argument is given to the function
-# it will call the original playMsg using all given arguments
-#
-proc playMsg {args} {
-  if {[llength $args] == 1} {
-    ::playMsg Core $args
-  } else {
-    ::playMsg {*}$args
-  }
-}
-
-
-#
-# A convenience function for printing out information prefixed by the
-# module name
-#
-proc printInfo {msg} {
-  puts "${::logic_name}: ${msg}"
-}
 
 
 #
@@ -489,6 +460,15 @@ proc squelch_open {rx_id is_open} {
 
 
 #
+# Executed when the signal level is updated for the receiver
+#   rx_id   - The ID of the RX that the signal level was updated on
+#   siglev  - Signal level, ideally 0-100 but may be outside that range
+proc siglev_updated {rx_id siglev} {
+  #printInfo "The signal level on receiver $rx_id is $siglev"
+}
+
+
+#
 # Executed when a DTMF digit has been received
 #   digit     - The detected DTMF digit
 #   duration  - The duration, in milliseconds, of the digit
@@ -579,8 +559,8 @@ proc every_second {} {
 # Deprecated: Use the addMinuteTickSubscriber function instead
 #
 proc addTimerTickSubscriber {func} {
-  puts "*** WARNING: Calling deprecated TCL event handler addTimerTickSubcriber."
-  puts "             Use addMinuteTickSubscriber instead"
+  printWarning "Calling deprecated TCL event handler addTimerTickSubcriber.\
+                Use addMinuteTickSubscriber instead"
   addMinuteTickSubscriber $func
 }
 
@@ -598,6 +578,20 @@ proc addMinuteTickSubscriber {func} {
 
 
 #
+# Use this function to remove a function to the list of functions that
+# should be executed once every minute. This is not an event
+# function but rather a management function.
+#
+proc removeMinuteTickSubscriber {func} {
+  variable minute_tick_subscribers
+  set ns [uplevel namespace current]
+  set handler [dict create func $func ns $ns]
+  set idx [lsearch -exact $minute_tick_subscribers $handler];
+  set minute_tick_subscribers [lreplace $minute_tick_subscribers $idx $idx]
+}
+
+
+#
 # Use this function to add a function to the list of functions that
 # should be executed once every second. This is not an event
 # function but rather a management function.
@@ -605,7 +599,22 @@ proc addMinuteTickSubscriber {func} {
 proc addSecondTickSubscriber {func} {
   variable second_tick_subscribers
   set ns [uplevel namespace current]
-  lappend second_tick_subscribers [dict create func $func ns $ns]
+  set handler [dict create func $func ns $ns]
+  lappend second_tick_subscribers $handler
+}
+
+
+#
+# Use this function to remove a function to the list of functions that
+# should be executed once every second. This is not an event
+# function but rather a management function.
+#
+proc removeSecondTickSubscriber {func} {
+  variable second_tick_subscribers
+  set ns [uplevel namespace current]
+  set handler [dict create func $func ns $ns]
+  set idx [lsearch -exact $second_tick_subscribers $handler];
+  set second_tick_subscribers [lreplace $second_tick_subscribers $idx $idx]
 }
 
 

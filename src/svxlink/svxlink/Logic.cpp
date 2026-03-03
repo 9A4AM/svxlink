@@ -170,7 +170,7 @@ Logic::Logic(void)
     currently_set_tx_ctrl_mode(Tx::TX_OFF), is_online(true),
     dtmf_digit_handler(0),                  state_pty(0),
     dtmf_ctrl_pty(0),                       command_pty(0),
-    m_ctcss_to_tg_timer(-1),                m_ctcss_to_tg_last_fq(0.0f)
+    m_ctcss_to_tg_timer(-1),                m_ctcss_to_tg_last_fq(-1.0f)
 {
   rgr_sound_timer.expired.connect(sigc::hide(
         mem_fun(*this, &Logic::sendRgrSound)));
@@ -209,12 +209,13 @@ bool Logic::initialize(Async::Config& cfgobj, const std::string& logic_name)
     return false;
   }
 
-  string event_handler_str;
-  if (!cfg().getValue(name(), "EVENT_HANDLER", event_handler_str))
+  std::string event_handler_str(SVX_SHARE_INSTALL_DIR);
+  event_handler_str += "/events.tcl";
+  cfg().getValue(name(), "EVENT_HANDLER", event_handler_str);
+  if (event_handler_str.empty())
   {
-    cerr << "*** ERROR: Config variable " << name()
-      	 << "/EVENT_HANDLER not set\n";
-    cleanup();
+    std::cerr << "*** ERROR: Config variable " << name()
+              << "/EVENT_HANDLER empty" << std::endl;
     return false;
   }
 
@@ -420,7 +421,12 @@ bool Logic::initialize(Async::Config& cfgobj, const std::string& logic_name)
     return false;
   }
   rx().squelchOpen.connect([&](bool is_open) {
-        if (!is_open)
+        if (is_open)
+        {
+          m_ctcss_to_tg_last_fq = 0.0f;
+          m_ctcss_to_tg_timer.setEnable(true);
+        }
+        else
         {
           //std::cout << "### Logic::[]: Disable CTCSS to TG timer"
           //          << std::endl;
@@ -433,6 +439,7 @@ bool Logic::initialize(Async::Config& cfgobj, const std::string& logic_name)
 	mem_fun(*this, &Logic::selcallSequenceDetected));
   rx().setMuteState(Rx::MUTE_NONE);
   rx().publishStateEvent.connect(mem_fun(*this, &Logic::onPublishStateEvent));
+  rx().signalLevelUpdated.connect(mem_fun(*this, &Logic::signalLevelUpdated));
   prev_rx_src = m_rx;
 
     // This valve is used to turn RX audio on/off into the logic core
@@ -690,9 +697,9 @@ bool Logic::initialize(Async::Config& cfgobj, const std::string& logic_name)
   dtmf_digit_handler->commandComplete.connect(
       mem_fun(*this, &Logic::putCmdOnQueue));
   exec_cmd_on_sql_close_timer.expired.connect(sigc::hide(
-      mem_fun(dtmf_digit_handler, &DtmfDigitHandler::forceCommandComplete)));
+      mem_fun(*dtmf_digit_handler, &DtmfDigitHandler::forceCommandComplete)));
 
-  int ctcss_to_tg_delay = 1000;
+  int ctcss_to_tg_delay = 0;
   cfg().getValue(name(), "CTCSS_TO_TG_DELAY", ctcss_to_tg_delay);
   m_ctcss_to_tg_timer.setTimeout(ctcss_to_tg_delay);
   m_ctcss_to_tg_timer.expired.connect([&](Async::Timer* t)
@@ -700,17 +707,22 @@ bool Logic::initialize(Async::Config& cfgobj, const std::string& logic_name)
         //std::cout << "### ctcss_to_tg_timer expired: m_ctcss_to_tg_last_fq="
         //          << m_ctcss_to_tg_last_fq << std::endl;
         t->setEnable(false);
+        if (m_ctcss_to_tg_last_fq < 0.0f)
+        {
+          return;
+        }
         uint16_t uint_fq = static_cast<uint16_t>(
             round(10.0f*m_ctcss_to_tg_last_fq));
         auto it = m_ctcss_to_tg.find(uint_fq);
+        uint32_t tg = 0;
         if (it != m_ctcss_to_tg.end())
         {
-          uint32_t tg = it->second;
+          tg = it->second;
           //cout << "### Map CTCSS " << m_ctcss_to_tg_last_fq << " to TG #"
           //     << tg << endl;
-          setReceivedTg(tg);
         }
-        m_ctcss_to_tg_last_fq = 0.0f;
+        setReceivedTg(tg);
+        m_ctcss_to_tg_last_fq = -1.0f;
       });
 
   typedef std::vector<SvxLink::SepPair<float, uint32_t> > CtcssToTgVec;
@@ -1068,11 +1080,16 @@ void Logic::squelchOpen(bool is_open)
     active_module->squelchOpen(is_open);
   }
 
+  signalLevelUpdated(rx().signalStrength());
   stringstream ss;
   ss << "squelch_open " << rx().sqlRxId() << " " << (is_open ? "1" : "0");
   processEvent(ss.str());
 
-  if (!is_open)
+  if (is_open)
+  {
+    exec_cmd_on_sql_close_timer.setEnable(false);
+  }
+  else
   {
     const string &received_digits = dtmf_digit_handler->command();
     if (!dtmf_digit_handler->antiFlutterActive() &&
@@ -1088,11 +1105,6 @@ void Logic::squelchOpen(bool is_open)
       }
     }
     processCommandQueue();
-    setReceivedTg(0);
-  }
-  else
-  {
-    exec_cmd_on_sql_close_timer.setEnable(false);
   }
 
   if (LocationInfo::has_instance())
@@ -1103,7 +1115,6 @@ void Logic::squelchOpen(bool is_open)
   updateTxCtcss(is_open, TX_CTCSS_SQL_OPEN);
 
   checkIdle();
-
 } /* Logic::squelchOpen */
 
 
@@ -1860,6 +1871,14 @@ bool Logic::getConfigValue(const std::string& section, const std::string& tag,
 {
   return cfg().getValue(section, tag, value, true);
 } /* Logic::getConfigValue */
+
+
+void Logic::signalLevelUpdated(float siglev)
+{
+  std::ostringstream ss;
+  ss << "siglev_updated " << rx().sqlRxId() << " " << siglev;
+  processEvent(ss.str());
+} /* Logic::signalLevelUpdated */
 
 
 /*

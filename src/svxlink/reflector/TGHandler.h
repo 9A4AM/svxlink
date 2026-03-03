@@ -165,14 +165,16 @@ class TGHandler : public sigc::trackable
 
     bool allowTgSelection(ReflectorClient *client, uint32_t tg);
 
+    bool allowTgMonitoring(ReflectorClient *client, uint32_t tg);
+
     bool showActivity(uint32_t tg) const;
 
     bool isRestricted(uint32_t tg) const;
 
-    sigc::signal<void, uint32_t,
-      ReflectorClient*, ReflectorClient*> talkerUpdated;
+    sigc::signal<void(uint32_t,
+      ReflectorClient*, ReflectorClient*)> talkerUpdated;
 
-    sigc::signal<void, uint32_t> requestAutoQsy;
+    sigc::signal<void(uint32_t)> requestAutoQsy;
 
   private:
     static const time_t TALKER_AUDIO_TIMEOUT = 3; // Max three seconds gap

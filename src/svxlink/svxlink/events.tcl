@@ -13,21 +13,7 @@
 #
 ###############################################################################
 
-#
-# Process the given event.
-# All TCL modules should use this function instead of calling playMsg etc
-# directly. The module code should only contain the logic, not the handling
-# of the event.
-#
-#   module - The module to process the event in
-#   ev     - The event to process
-#
-# FIXME: This function should be moved to a file that contain common TCL module
-#        code.
-proc processEvent {module ev} {
-  append func $module "::" $ev
-  eval "$func"
-}
+puts "${::logic_name}: Loading [file normalize [info script]]"
 
 
 #
@@ -61,12 +47,12 @@ source "${::basedir}/events.d/globals.tcl"
 
 # Source TCL code for the logic core
 sourceTclWithOverrides "${::logic_type}LogicType.tcl"
-sourceTclWithOverrides "${::logic_name}.tcl"
+sourceTclOverrides "${::logic_name}.tcl"
 
 # Enable support for legacy TCL code
 enableLegacySupport
 
-puts "$logic_name: Event handler script successfully loaded.";
+printInfo "Event handler script successfully loaded.";
 
 #printNamespaceTree
 

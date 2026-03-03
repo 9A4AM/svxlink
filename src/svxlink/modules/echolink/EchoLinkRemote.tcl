@@ -4,6 +4,8 @@
 #
 ###############################################################################
 
+puts "${::module_name}: Loading [file normalize [info script]]"
+
 # Set up some global variables
 set basedir [file dirname [file dirname [info script]]];
 set lang [getConfigValue ${::logic_name} DEFAULT_LANG "en_US"]
@@ -13,6 +15,9 @@ set langdir "${::basedir}/sounds/${::lang}"
 # Load a base of global functions
 source "${::basedir}/events.d/globals.tcl"
 
+# Source locale handling code
+sourceTclWithOverrides "locale.tcl"
+
 
 #
 # This is the namespace in which all functions and variables below will exist.
@@ -21,6 +26,10 @@ source "${::basedir}/events.d/globals.tcl"
 # but it must be changed in both places.
 #
 namespace eval ${::logic_name}::${::module_name} {
+
+# Load common EchoLink functions used both here and for local events
+sourceTclWithOverrides "EchoLinkCommon.tcl"
+
 
 #
 # An "overloaded" playMsg that eliminates the need to write the module name
@@ -39,13 +48,13 @@ proc playMsg {args} {
 
 #
 # A convenience function for printing out information prefixed by the
-# module name
+# logic and module name
 #
 #   msg - The message to print
 #
-proc printInfo {msg} {
-  puts "${::module_name}: $msg";
-}
+#proc printInfo {msg} {
+#  puts "${::module_name}: $msg";
+#}
 
 
 #
@@ -104,6 +113,10 @@ proc squelch_open {is_open} {
 
 # end of namespace
 }
+
+
+sourceTclOverrides "${::module_type}Remote.tcl"
+
 
 #
 # This file has not been truncated
